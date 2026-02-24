@@ -1,135 +1,74 @@
-from flask import Flask, request, render_template_string
+from flask import Flask, request, render_template
 import os
-import zipfile
 import hashlib
-from datetime import datetime
+from collections import defaultdict
 
 app = Flask(__name__)
 
-HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Digital Declutter Assistant</title>
-    <style>
-        body {
-            font-family: Arial;
-            text-align: center;
-            background-color: #f4f6f8;
-            padding-top: 50px;
-        }
-        .card {
-            background: white;
-            padding: 25px;
-            margin: auto;
-            width: 450px;
-            border-radius: 12px;
-            box-shadow: 0px 5px 15px rgba(0,0,0,0.1);
-        }
-        button {
-            padding: 8px 15px;
-            border: none;
-            background: #4CAF50;
-            color: white;
-            border-radius: 5px;
-            cursor: pointer;
-        }
-        input {
-            margin-bottom: 15px;
-        }
-        .result {
-            text-align: left;
-            margin-top: 20px;
-        }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h2>Digital Declutter Assistant</h2>
-        <form method="POST" enctype="multipart/form-data">
-            <input type="file" name="file" required><br>
-            <button type="submit">Analyze</button>
-        </form>
-        <div class="result">
-            {{ result|safe }}
-        </div>
-    </div>
-</body>
-</html>
-"""
+# safety limit for Render free plan
+app.config['MAX_CONTENT_LENGTH'] = 25 * 1024 * 1024
 
-def get_file_hash(filepath):
-    hasher = hashlib.md5()
-    with open(filepath, 'rb') as f:
-        hasher.update(f.read())
-    return hasher.hexdigest()
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-@app.route('/', methods=['GET', 'POST'])
-def upload():
-    result = ""
-    if request.method == 'POST':
-        file = request.files['file']
-        if file:
-            os.makedirs("uploads", exist_ok=True)
-            zip_path = os.path.join("uploads", file.filename)
-            file.save(zip_path)
+@app.route("/", methods=["GET", "POST"])
+def index():
+    if request.method == "POST":
 
-            extract_path = os.path.join("uploads", "extracted")
-            os.makedirs(extract_path, exist_ok=True)
+        files = request.files.getlist("files")
+        file_data = []
 
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(extract_path)
+        for file in files:
+            if file.filename == "":
+                continue
 
-            total_files = 0
-            total_size = 0
-            largest_file = ("", 0)
-            hashes = {}
-            duplicates = 0
-            large_files = 0
-            old_files = 0
+            filepath = os.path.join(UPLOAD_FOLDER, file.filename)
+            file.save(filepath)
 
-            six_months_ago = datetime.now().timestamp() - (6 * 30 * 24 * 60 * 60)
+            size = os.path.getsize(filepath)
 
-            for root, dirs, files in os.walk(extract_path):
-                for name in files:
-                    total_files += 1
-                    filepath = os.path.join(root, name)
-                    size = os.path.getsize(filepath)
-                    total_size += size
+            with open(filepath, "rb") as f:
+                file_hash = hashlib.md5(f.read()).hexdigest()
 
-                    if size > largest_file[1]:
-                        largest_file = (name, size)
+            file_data.append({
+                "name": file.filename,
+                "size": size,
+                "hash": file_hash
+            })
 
-                    if size > 50 * 1024 * 1024:
-                        large_files += 1
+        total_size = sum(f["size"] for f in file_data)
 
-                    last_modified = os.path.getmtime(filepath)
-                    if last_modified < six_months_ago:
-                        old_files += 1
+        # Duplicate detection
+        hash_map = defaultdict(list)
+        for f in file_data:
+            hash_map[f["hash"]].append(f)
 
-                    file_hash = get_file_hash(filepath)
-                    if file_hash in hashes:
-                        duplicates += 1
-                    else:
-                        hashes[file_hash] = name
+        duplicates = [group for group in hash_map.values() if len(group) > 1]
 
-            clutter_score = min(100, duplicates * 5 + large_files * 3 + old_files * 2)
+        duplicate_count = sum(len(group) - 1 for group in duplicates)
+        duplicate_waste = sum((len(group) - 1) * group[0]["size"] for group in duplicates)
 
-            result = f"""
-            <h3>Analysis Result</h3>
-            <p><strong>Total Files:</strong> {total_files}</p>
-            <p><strong>Total Size:</strong> {round(total_size/1024/1024,2)} MB</p>
-            <p><strong>Largest File:</strong> {largest_file[0]}</p>
-            <p><strong>Duplicate Files:</strong> {duplicates}</p>
-            <p><strong>Large Files (>50MB):</strong> {large_files}</p>
-            <p><strong>Old Files (>6 months):</strong> {old_files}</p>
-            <hr>
-            <p><strong>Clutter Score:</strong> {clutter_score}/100</p>
-            """
+        # Largest files
+        largest = sorted(file_data, key=lambda x: x["size"], reverse=True)[:10]
+        top_total = sum(f["size"] for f in largest)
+        percentage = (top_total / total_size * 100) if total_size else 0
 
-    return render_template_string(HTML, result=result)
+        # Screenshot detection
+        screenshots = [
+            f for f in file_data
+            if "screenshot" in f["name"].lower()
+        ]
 
-import os
+        return render_template(
+            "index.html",
+            duplicate_count=duplicate_count,
+            duplicate_waste=round(duplicate_waste / (1024*1024), 2),
+            percentage=round(percentage, 2),
+            screenshot_count=len(screenshots)
+        )
+
+    return render_template("index.html")
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))

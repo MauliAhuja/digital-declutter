@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Digital Declutter</title>
+</head>
+<body>
+
+<h1>Digital Declutter</h1>
+
+<form method="POST" enctype="multipart/form-data">
+    <input type="file" name="files" multiple>
+    <button type="submit">Analyze</button>
+</form>
+
+{% if duplicate_count is defined %}
+<hr>
+<h2>Smart Insights</h2>
+
+<p>🔁 {{ duplicate_count }} duplicate files wasting {{ duplicate_waste }} MB</p>
+<p>📦 Top 10 files take {{ percentage }}% of total storage</p>
+<p>📸 {{ screenshot_count }} screenshots detected</p>
+
+{% endif %}
+
+</body>
+</html>
